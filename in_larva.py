@@ -26,7 +26,13 @@ job.load_in_memory()
 arr = job.img
 print(f"Loaded array shape: {arr.shape}")
 # %%
-fig, ax = plt.subplots(figsize=(10, 10))
-vmin, vmax = np.percentile(arr[..., 0], (0., 100. ))
-ax.imshow(arr[...,  0], cmap='gray', vmin=vmin, vmax=vmax)
+n_z = 2
+fig, ax = plt.subplots(1,n_z, figsize=(30, 30))
+if n_z >1:
+    ax = ax.flatten()
+for z in range(0,n_z):
+    vmin, vmax = np.percentile(arr[..., z], (0., 100. ))
+    ax[z].imshow(arr[...,  z], cmap='gray', vmin=vmin, vmax=vmax)
+    ax[z].axis('off')
+fig.tight_layout()
 # %%

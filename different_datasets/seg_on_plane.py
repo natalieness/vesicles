@@ -177,12 +177,12 @@ cutout = em_no_boundaries.copy()   # (x, y, z) = (300, 300, 10)
 #                   None = no circularity filter
 # =============================================================================
 
-THRESHOLD       = 120       # 0–255
+THRESHOLD       = 180       # 0–255
 THRESHOLD_MODE  = 'below'   # 'below' | 'above'
 MIN_VOXELS      = 5        # voxels; remove small noise blobs
 USE_WATERSHED   = True      # True = watershed | False = connected-components
 WS_MIN_DIST     = 1        # px between watershed seeds
-WS_SMOOTH_SIGMA = 10.0       # Gaussian blur on distance map before peak finding
+WS_SMOOTH_SIGMA = 1.0       # Gaussian blur on distance map before peak finding
                              #   ↑ higher → softer/fewer splits (try 1–5)
                              #   0 = no smoothing (harshest)
 WS_COMPACTNESS  = 0.001     # 0 = classic | higher = more uniform seeds
@@ -223,6 +223,9 @@ else:
     method_str = 'connected-components (26-conn)'
 
 n_objects = int(labels_3d.max())
+rgba_lut = get_rgba_lut(n_objects)
+fig = plot_segmentation(labels_3d, volume, rgba_lut, n_objects, THRESHOLD, THRESHOLD_MODE, method_str, nz, single_z=0)
+
 print(f"\n── Segmentation ──────────────────────────────────────────")
 print(f"  method      : {method_str}")
 print(f"  threshold   : {THRESHOLD} ({THRESHOLD_MODE})")
@@ -295,62 +298,137 @@ if n_objects > 0:
     else:
         print(f"  no objects removed by filter  ({n_objects} remain)\n")
 
+n_objects = int(labels_3d.max())
+rgba_lut = get_rgba_lut(n_objects)
+fig = plot_segmentation(labels_3d, volume, rgba_lut, n_objects, THRESHOLD, THRESHOLD_MODE, method_str, nz, single_z=0)
 # %%
 
 # ── Colour LUT  (label 0 = background → transparent) ─────────────────────────
-cmap_src  = plt.colormaps['tab20']
-rgba_lut  = np.zeros((n_objects + 1, 4), dtype=float)
-for i in range(1, n_objects + 1):
-    rgba_lut[i] = cmap_src((i - 1) % 20)
+def get_rgba_lut(n_objects):
+    cmap_src  = plt.colormaps['tab20']
+    rgba_lut  = np.zeros((n_objects + 1, 4), dtype=float)
+    for i in range(1, n_objects + 1):
+        rgba_lut[i] = cmap_src((i - 1) % 20)
+    return rgba_lut
 
-# ── Plot: 10 z-slices, coloured overlays ─────────────────────────────────────
-ncols     = 2
-nrows     = int(np.ceil(nz / ncols))
-fig, axes = plt.subplots(nrows, ncols,
-                         figsize=(ncols * 3.6, nrows * 3.6 + 1.0),
-                         squeeze=False)
-axes_flat = axes.flatten()
+# ── Plot function: visualize current objects/masks ────────────────────────────
+def plot_segmentation(labels_3d, volume, rgba_lut, n_objects, THRESHOLD, THRESHOLD_MODE, 
+                      method_str, nz, single_z=None):
+    """
+    Plot 3D segmentation results with coloured object overlays.
+    
+    Parameters:
+    -----------
+    labels_3d : ndarray, shape (nz, ny, nx)
+        3D labeled segmentation (label 0 = background)
+    volume : ndarray, shape (nz, ny, nx)
+        EM volume data
+    rgba_lut : ndarray, shape (n_objects+1, 4)
+        RGBA color lookup table for each label
+    n_objects : int
+        Number of segmented objects
+    THRESHOLD : int
+        Threshold value used for segmentation (0-255)
+    THRESHOLD_MODE : str
+        'below' or 'above'
+    method_str : str
+        Description of segmentation method
+    nz : int
+        Number of z-slices in volume
+    single_z : int or None, optional
+        If None (default): plot all z-slices
+        If int: plot only the specified z-slice (0-indexed)
+    
+    Returns:
+    --------
+    fig : matplotlib.figure.Figure
+        The created figure
+    """
+    vmin_v = float(np.percentile(volume, 0.5))
+    vmax_v = float(np.percentile(volume, 99.5))
+    
+    if single_z is not None:
+        # Plot single z-slice
+        if not (0 <= single_z < nz):
+            print(f"Error: single_z={single_z} out of range [0, {nz-1}]")
+            return None
+        
+        fig, ax = plt.subplots(figsize=(5, 5))
+        z = single_z
+        
+        ax.imshow(volume[z], cmap='gray', vmin=vmin_v, vmax=vmax_v,
+                  interpolation='nearest')
 
-vmin_v = float(np.percentile(volume, 0.5))
-vmax_v = float(np.percentile(volume, 99.5))
+        sl = labels_3d[z]
+        if sl.max() > 0:
+            # Semi-transparent coloured overlay only — no text labels
+            overlay         = rgba_lut[sl].copy()        # (ny, nx, 4)
+            overlay[..., 3] = np.where(sl > 0, 0.85, 0.0)
+            ax.imshow(overlay, interpolation='nearest')
 
-for z in range(nz):
-    ax = axes_flat[z]
-    ax.imshow(volume[z], cmap='gray', vmin=vmin_v, vmax=vmax_v,
-              interpolation='nearest')
+        ax.set_title(f'z = {z}', fontsize=10)
+        ax.axis('off')
+        
+        fig.suptitle(
+            f'3D segmentation (z={z})  |  thresh={THRESHOLD} ({THRESHOLD_MODE})  '
+            f'|  {method_str}  |  {n_objects} objects',
+            fontsize=10,
+        )
+    else:
+        # Plot all z-slices
+        ncols     = 2
+        nrows     = int(np.ceil(nz / ncols))
+        fig, axes = plt.subplots(nrows, ncols,
+                                 figsize=(ncols * 3.6, nrows * 3.6 + 1.0),
+                                 squeeze=False)
+        axes_flat = axes.flatten()
 
-    sl = labels_3d[z]
-    if sl.max() > 0:
-        # Semi-transparent coloured overlay only — no text labels
-        overlay         = rgba_lut[sl].copy()        # (ny, nx, 4)
-        overlay[..., 3] = np.where(sl > 0, 0.85, 0.0)
-        ax.imshow(overlay, interpolation='nearest')
+        for z in range(nz):
+            ax = axes_flat[z]
+            ax.imshow(volume[z], cmap='gray', vmin=vmin_v, vmax=vmax_v,
+                      interpolation='nearest')
 
-    ax.set_title(f'z = {z}', fontsize=9)
-    ax.axis('off')
+            sl = labels_3d[z]
+            if sl.max() > 0:
+                # Semi-transparent coloured overlay only — no text labels
+                overlay         = rgba_lut[sl].copy()        # (ny, nx, 4)
+                overlay[..., 3] = np.where(sl > 0, 0.85, 0.0)
+                ax.imshow(overlay, interpolation='nearest')
 
-# Hide unused subplot panels
-for z in range(nz, len(axes_flat)):
-    axes_flat[z].set_visible(False)
+            ax.set_title(f'z = {z}', fontsize=9)
+            ax.axis('off')
 
-# Legend
-# if n_objects > 0:
-#     patches = [mpatches.Patch(facecolor=rgba_lut[i, :3], label=f'obj {i}')
-#                for i in range(1, n_objects + 1)]
-#     fig.legend(handles=patches, loc='lower center',
-#                ncol=min(n_objects, 12), fontsize=8,
-#                title='3D objects', framealpha=0.9,
-#                bbox_to_anchor=(0.5, -0.01))
+        # Hide unused subplot panels
+        for z in range(nz, len(axes_flat)):
+            axes_flat[z].set_visible(False)
 
-fig.suptitle(
-    f'3D segmentation  |  thresh={THRESHOLD} ({THRESHOLD_MODE})  '
-    f'|  {method_str}  |  {n_objects} objects',
-    fontsize=10,
-)
-plt.tight_layout()
-# plt.savefig('segmentation_zslices.png', dpi=150, bbox_inches='tight')
-plt.show()
-# print("Saved → segmentation_zslices.png")
+        # Legend
+        # if n_objects > 0:
+        #     patches = [mpatches.Patch(facecolor=rgba_lut[i, :3], label=f'obj {i}')
+        #                for i in range(1, n_objects + 1)]
+        #     fig.legend(handles=patches, loc='lower center',
+        #                ncol=min(n_objects, 12), fontsize=8,
+        #                title='3D objects', framealpha=0.9,
+        #                bbox_to_anchor=(0.5, -0.01))
+
+        fig.suptitle(
+            f'3D segmentation  |  thresh={THRESHOLD} ({THRESHOLD_MODE})  '
+            f'|  {method_str}  |  {n_objects} objects',
+            fontsize=10,
+        )
+        plt.tight_layout()
+    
+    # plt.savefig('segmentation_zslices.png', dpi=150, bbox_inches='tight')
+    plt.show()
+    # print("Saved → segmentation_zslices.png")
+    
+    return fig
+
+
+# ── Call plotting function ────────────────────────────────────────────────────
+# Plot all z-slices (default behavior)
+fig = plot_segmentation(labels_3d, volume, rgba_lut, n_objects, THRESHOLD, THRESHOLD_MODE, 
+                  method_str, nz)
 
 
 # %%

@@ -1,8 +1,20 @@
 *pymaid_creds.py
 *__pycache__/
-*__DS_Store*
+*DS_Store*
+
 
 *.csv
 *.tif*
 *.png
 .claude
+.vscode
+*.pdf
+*gz
+*.parquet
+
+
+# models
+*.pt
+*.json
+
+*analysis_notes.md
