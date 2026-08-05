@@ -6,13 +6,19 @@ Usage
     python generate_ground_truth.py --input-dir data/fafb_em --output-dir data/ground_truth
     python generate_ground_truth.py --redo          # re-annotate images that already have a csv
 
+The panel on the right lists every annotation on the current image with its
+diameter in nanometres, assuming one image pixel is one EM voxel. That holds for
+the cutouts written by show_data.py (FAFB v14 at mip 0, saved with scale=1), so
+the default is 4 nm/px; use --pixel-size-nm if the images were saved upsampled or
+at a coarser mip.
+
 Controls
 --------
     left click + drag    draw a circle (press at centre, drag out to the radius)
     right click          delete the circle under the cursor
     delete / backspace   delete the circle under the cursor
     u                    undo the last circle
-    scroll wheel         zoom in / out around the cursor
+    scroll wheel         zoom in / out around the cursor (or scroll the table)
     middle click + drag  pan
     r                    reset the view
     (the matplotlib toolbar pan/zoom tools also work; drawing is disabled while they are active)
@@ -56,6 +62,10 @@ CIRCLE_COLOR = "#00ff88"
 HIGHLIGHT_COLOR = "#ff2d55"
 PREVIEW_COLOR = "#ffd000"
 CSV_HEADER = ["index", "image", "x", "y", "radius"]
+
+PIXEL_SIZE_NM = 4.0     # FAFB v14 mip 0, one PNG pixel per EM voxel
+TABLE_FONTSIZE = 9
+TABLE_ROW_SPACING = 1.7  # row pitch as a multiple of the font size
 
 
 def list_images(input_dir):
@@ -128,9 +138,10 @@ def write_overlay(path, pil_image, circles, supersample=4, linewidth=1.0):
 class CircleAnnotator:
     """Interactive viewer that walks through a list of images one at a time."""
 
-    def __init__(self, images, output_dir):
+    def __init__(self, images, output_dir, pixel_size_nm=PIXEL_SIZE_NM):
         self.images = list(images)
         self.output_dir = output_dir
+        self.pixel_size_nm = float(pixel_size_nm)
         self.position = 0
 
         self.image = None
@@ -142,10 +153,13 @@ class CircleAnnotator:
         self.cursor_xy = None
         self.highlighted = None
         self.pan_start = None
+        self.table_scroll = 0   # index of the first annotation shown in the table
+        self.follow_highlight = False
 
-        self.fig = plt.figure(figsize=(9, 9.6))
-        self.ax = self.fig.add_axes([0.06, 0.14, 0.88, 0.80])
+        self.fig = plt.figure(figsize=(12.5, 9.6))
+        self.ax = self.fig.add_axes([0.045, 0.14, 0.61, 0.80])
         self.ax.set_facecolor("black")
+        self.table_ax = self.fig.add_axes([0.71, 0.14, 0.26, 0.80])
 
         self.status = self.fig.text(
             0.5, 0.065, "", ha="center", va="center", fontsize=9, color="#444444"
@@ -153,11 +167,11 @@ class CircleAnnotator:
 
         self.buttons = []
         for label, left, color, callback in [
-            ("Save && continue", 0.10, "#cdebd6", self.on_save_continue),
-            ("Save && stop", 0.39, "#cddceb", self.on_save_stop),
-            ("Cancel", 0.68, "#ebcdcd", self.on_cancel),
+            ("Save && continue", 0.08, "#cdebd6", self.on_save_continue),
+            ("Save && stop", 0.31, "#cddceb", self.on_save_stop),
+            ("Cancel", 0.54, "#ebcdcd", self.on_cancel),
         ]:
-            axes = self.fig.add_axes([left, 0.015, 0.22, 0.045])
+            axes = self.fig.add_axes([left, 0.015, 0.17, 0.045])
             button = Button(axes, label, color=color, hovercolor="#ffffff")
             button.on_clicked(callback)
             self.buttons.append(button)
@@ -167,6 +181,8 @@ class CircleAnnotator:
         self.fig.canvas.mpl_connect("button_release_event", self.on_release)
         self.fig.canvas.mpl_connect("scroll_event", self.on_scroll)
         self.fig.canvas.mpl_connect("key_press_event", self.on_key)
+        # the number of table rows that fit depends on the window size
+        self.fig.canvas.mpl_connect("resize_event", lambda _event: self.refresh_table())
 
         self.load_current()
 
@@ -183,6 +199,7 @@ class CircleAnnotator:
         self.patches = []
         self.preview = None
         self.highlighted = None
+        self.table_scroll = 0
 
         self.ax.clear()
         self.ax.imshow(self.image, cmap="gray", interpolation="nearest")
@@ -211,7 +228,83 @@ class CircleAnnotator:
         if message:
             text += f"   |   {message}"
         self.status.set_text(text)
+        self.refresh_table()
         self.fig.canvas.draw_idle()
+
+    # ------------------------------------------------------------------ table
+
+    def diameter_nm(self, index):
+        return 2.0 * self.circles[index][2] * self.pixel_size_nm
+
+    def table_rows_visible(self):
+        """How many annotation rows fit in the table panel at the current size."""
+        try:
+            height_px = self.table_ax.get_window_extent().height
+        except Exception:  # pragma: no cover - no renderer yet
+            return 30
+        row_px = TABLE_FONTSIZE * self.fig.dpi / 72.0 * TABLE_ROW_SPACING
+        # two rows are spent on the header and the footer
+        return max(1, int(height_px / row_px) - 2)
+
+    def refresh_table(self):
+        """Redraw the annotation list, scrolled to `self.table_scroll`."""
+        ax = self.table_ax
+        ax.clear()
+        ax.set_xlim(0, 1)
+        ax.set_ylim(0, 1)
+        ax.set_xticks([])
+        ax.set_yticks([])
+        ax.set_facecolor("#fbfbfb")
+        for spine in ax.spines.values():
+            spine.set_color("#cccccc")
+
+        total = len(self.circles)
+        visible = self.table_rows_visible()
+        self.table_scroll = int(min(max(self.table_scroll, 0), max(0, total - visible)))
+        # jump to the circle that just came under the cursor, but leave the view
+        # alone while the user is scrolling the table themselves
+        if self.follow_highlight and self.highlighted is not None:
+            if self.highlighted < self.table_scroll:
+                self.table_scroll = self.highlighted
+            elif self.highlighted >= self.table_scroll + visible:
+                self.table_scroll = self.highlighted - visible + 1
+        self.follow_highlight = False
+
+        pitch = 1.0 / (visible + 2)
+        top = 1.0 - 0.7 * pitch
+        ax.text(0.06, top, "annotation_id", fontsize=TABLE_FONTSIZE,
+                fontweight="bold", va="center", color="#222222")
+        ax.text(0.94, top, "diameter (nm)", fontsize=TABLE_FONTSIZE,
+                fontweight="bold", va="center", ha="right", color="#222222")
+        ax.axhline(top - 0.4 * pitch, xmin=0.03, xmax=0.97,
+                   color="#bbbbbb", linewidth=0.8)
+
+        for offset in range(visible):
+            index = self.table_scroll + offset
+            if index >= total:
+                break
+            selected = index == self.highlighted
+            color = HIGHLIGHT_COLOR if selected else "#333333"
+            weight = "bold" if selected else "normal"
+            y = top - (offset + 1) * pitch
+            if selected:
+                ax.axhspan(y - 0.45 * pitch, y + 0.45 * pitch,
+                           color=HIGHLIGHT_COLOR, alpha=0.10, linewidth=0)
+            ax.text(0.06, y, str(index), fontsize=TABLE_FONTSIZE, va="center",
+                    color=color, fontweight=weight, family="monospace")
+            ax.text(0.94, y, f"{self.diameter_nm(index):.1f}",
+                    fontsize=TABLE_FONTSIZE, va="center", ha="right",
+                    color=color, fontweight=weight, family="monospace")
+
+        if total == 0:
+            footer = "no annotations yet"
+        elif total > visible:
+            footer = (f"{self.table_scroll + 1}-{min(self.table_scroll + visible, total)}"
+                      f" of {total}  ·  scroll here for more")
+        else:
+            footer = f"{total} annotation(s)  ·  {self.pixel_size_nm:g} nm/px"
+        ax.text(0.5, 0.4 * pitch, footer, fontsize=TABLE_FONTSIZE - 1,
+                va="center", ha="center", color="#888888")
 
     # ------------------------------------------------------------- annotation
 
@@ -220,6 +313,7 @@ class CircleAnnotator:
         self.ax.add_patch(patch)
         self.circles.append([x, y, r])
         self.patches.append(patch)
+        self.table_scroll = len(self.circles)  # clamped in refresh_table: show the new row
 
     def remove_circle(self, index):
         self.patches[index].remove()
@@ -257,6 +351,8 @@ class CircleAnnotator:
             self.patches[index].set_edgecolor(HIGHLIGHT_COLOR)
             self.patches[index].set_linewidth(2.0)
         self.highlighted = index
+        self.follow_highlight = True
+        self.refresh_table()
         self.fig.canvas.draw_idle()
 
     def delete_under_cursor(self):
@@ -342,6 +438,12 @@ class CircleAnnotator:
             self.update_status("circle too small - drag further out from the centre")
 
     def on_scroll(self, event):
+        if event.inaxes is self.table_ax:
+            step = 3 * (-1 if event.button == "up" else 1)
+            self.table_scroll += step
+            self.refresh_table()
+            self.fig.canvas.draw_idle()
+            return
         if event.inaxes is not self.ax or event.xdata is None:
             return
         scale = 0.8 if event.button == "up" else 1.25
@@ -416,6 +518,9 @@ def main(argv=None):
                              "(default: data/fafb_em_gt)")
     parser.add_argument("--redo", action="store_true",
                         help="also show images that already have annotations")
+    parser.add_argument("--pixel-size-nm", type=float, default=PIXEL_SIZE_NM,
+                        help="x/y size of one image pixel, used for the diameter "
+                             f"column (default: {PIXEL_SIZE_NM:g})")
     args = parser.parse_args(argv)
 
     if not args.input_dir.is_dir():
@@ -432,7 +537,7 @@ def main(argv=None):
         return 0
 
     print(f"{len(images)} image(s) to annotate; saving to {args.output_dir}")
-    CircleAnnotator(images, args.output_dir).run()
+    CircleAnnotator(images, args.output_dir, pixel_size_nm=args.pixel_size_nm).run()
     return 0
 
 
