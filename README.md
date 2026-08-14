@@ -4,8 +4,8 @@ to use the ground truth annotation tool:
 
 ### make a conda environment and activate it (if needed)
 ```
-// conda create -n vesicles -c conda-forge python=3.11 matplotlib numpy pillow tk -y 
-// conda activate vesicles
+conda create -n vesicles -c conda-forge python=3.11 matplotlib numpy pillow tk -y 
+conda activate vesicles
 ```
 
 ### navigate to folder you want the repo to end up in 
