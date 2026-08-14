@@ -511,11 +511,11 @@ class CircleAnnotator:
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__,
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--input-dir", type=Path, default=Path("data/fafb_em"),
-                        help="folder of images to annotate (default: data/fafb_em)")
-    parser.add_argument("--output-dir", type=Path, default=Path("data/fafb_em_gt"),
+    parser.add_argument("--input-dir", type=Path, default=Path("data/fafbv783_em"),
+                        help="folder of images to annotate (default: data/fafbv783_em)")
+    parser.add_argument("--output-dir", type=Path, default=Path("data/fafbv783_em_gt"),
                         help="folder for {name}_anns.csv and {name}_overlay.png "
-                             "(default: data/fafb_em_gt)")
+                             "(default: data/fafbv783_em_gt)")
     parser.add_argument("--redo", action="store_true",
                         help="also show images that already have annotations")
     parser.add_argument("--pixel-size-nm", type=float, default=PIXEL_SIZE_NM,
